@@ -1,0 +1,6 @@
+.venv/
+data/
+results*.jsonl
+.env
+__pycache__/
+big.json
