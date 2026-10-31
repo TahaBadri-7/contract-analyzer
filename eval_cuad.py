@@ -2,8 +2,13 @@
 
 This file knows nothing about prompts or models. It imports extract() from extractor.py,
 so the service and the eval can never disagree about what the model was asked.
+
+Usage:
+    python eval_cuad.py            # small mode: balanced 12 contracts under 40 KB
+    python eval_cuad.py large      # large mode: balanced 10 contracts of 100-190 KB
 """
 import json
+import sys
 import time
 from pathlib import Path
 
@@ -12,14 +17,15 @@ import pandas as pd
 from extractor import extract
 
 # --- settings ---
+MODE = sys.argv[1] if len(sys.argv) > 1 else "small"   # sys.argv is process.argv
+RUN = "run6"                                            # bump this every run
+
 DATA = Path("data/CUAD_v1")
 CSV = DATA / "master_clauses.csv"
 TXT_DIR = DATA / "full_contract_txt"
-OUT = Path("results_run5.jsonl")   # one file per run; keep them all
-MAX_BYTES = 40_000                  # size is a filter for speed, not the selector
-PER_GROUP = 6                       # contracts with a cap, and contracts without
-SEED = 42                           # fixed seed: the same contracts every run
-PAUSE_SECONDS = 2                   # breathing room between calls; rate limits are real
+OUT = Path(f"results_{MODE}_{RUN}.jsonl")   # one file per run and mode; keep them all
+SEED = 42                                   # fixed seed: the same contracts every run
+PAUSE_SECONDS = 12                           # breathing room between calls; rate limits are real
 
 GOV_COL = "Governing Law-Answer"
 CAP_COL = "Cap On Liability-Answer"
@@ -47,17 +53,30 @@ def gov_law_correct(label, found: bool, value: str | None) -> bool:
     return any(p and p in value for p in parts)
 
 
-# --- load the answer key and choose contracts: by labels, not by size ---
+# --- choosing contracts: by labels, with size as a filter ---
+def choose_contracts(df: pd.DataFrame, mode: str) -> pd.DataFrame:
+    """Return a balanced sample (half with a cap, half without) from a size band."""
+    pool = df.dropna(subset=["size"])
+    if mode == "small":
+        pool = pool[pool["size"] < 40_000]
+        per_group = 6
+    elif mode == "large":
+        pool = pool[(pool["size"] > 100_000) & (pool["size"] < 190_000)]   # under the API's 200k-char cap
+        per_group = 5
+    else:
+        raise SystemExit(f"unknown mode: {mode} (use 'small' or 'large')")
+    cap_yes = pool[pool[CAP_COL].str.strip().str.lower() == "yes"]
+    cap_no = pool[pool[CAP_COL].str.strip().str.lower() == "no"]
+    return pd.concat([cap_yes.sample(per_group, random_state=SEED),
+                      cap_no.sample(per_group, random_state=SEED)])
+
+
+# --- load the answer key and choose ---
 df = pd.read_csv(CSV)
 df["txt_path"] = df["Filename"].map(lambda f: TXT_DIR / (Path(f).stem + ".txt"))
 df["size"] = df["txt_path"].map(lambda p: p.stat().st_size if p.exists() else None)
-pool = df.dropna(subset=["size"])
-pool = pool[pool["size"] < MAX_BYTES]
-cap_yes = pool[pool[CAP_COL].str.strip().str.lower() == "yes"]
-cap_no = pool[pool[CAP_COL].str.strip().str.lower() == "no"]
-sample = pd.concat([cap_yes.sample(PER_GROUP, random_state=SEED),
-                    cap_no.sample(PER_GROUP, random_state=SEED)])
-print(f"{len(sample)} contracts selected:\n")
+sample = choose_contracts(df, MODE)
+print(f"mode={MODE}  {len(sample)} contracts selected:\n")
 print(sample[["Filename", "size", GOV_COL, CAP_COL, NC_COL]].to_string())
 print()
 
@@ -81,6 +100,7 @@ for _, row in sample.iterrows():
 
     r = {
         "file": row["Filename"],
+        "size_bytes": int(row["size"]),
         "input_tokens": res.input_tokens,
         "seconds": res.seconds,
         "gov_correct": gov_law_correct(row[GOV_COL], res.governing_law.found, res.governing_law.value),
@@ -96,16 +116,20 @@ for _, row in sample.iterrows():
     out_file.flush()
     print(f"{r['file'][:42]:42} gov={r['gov_correct']!s:5} cap={r['cap_correct']!s:5} "
           f"nc={r['nc_correct']!s:5} ev={r['evidence_verified']}/{r['found_count']} "
-          f"{r['input_tokens']:>6} tok {r['seconds']}s")
+          f"{r['input_tokens']:>7} tok {r['seconds']:>6}s")
     time.sleep(PAUSE_SECONDS)
 
 out_file.close()
 
 # --- score: the denominator is every contract we chose, failures count as wrong ---
 n_total = len(sample)
-print(f"\nSCORE over {n_total} contracts ({len(failures)} failed calls counted as wrong)")
+print(f"\nSCORE mode={MODE} over {n_total} contracts ({len(failures)} failed calls counted as wrong)")
 for key in ["gov_correct", "cap_correct", "nc_correct"]:
     print(f"  {key:12} {sum(r[key] for r in results):>2}/{n_total}")
 found_total = sum(r["found_count"] for r in results)
 verified_total = sum(r["evidence_verified"] for r in results)
 print(f"  evidence     {verified_total}/{found_total} of found clauses verified")
+if results:
+    avg_tokens = sum(r["input_tokens"] for r in results) / len(results)
+    avg_seconds = sum(r["seconds"] for r in results) / len(results)
+    print(f"  avg input tokens {avg_tokens:,.0f}   avg seconds {avg_seconds:.1f}")
