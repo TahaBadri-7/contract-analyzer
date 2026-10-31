@@ -3,4 +3,5 @@ data/
 results*.jsonl
 .env
 __pycache__/
-big.json.DS_Store
+big.json
+.DS_Store
