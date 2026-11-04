@@ -1,9 +1,14 @@
 """Retrieval: cut a contract into chunks and find the few that matter for each clause.
 
-Two search methods over the same chunks, so they can be compared on the same eval:
-  - "bm25":   keyword search. Matches words. Free, instant, strong on formulaic clauses.
-  - "vector": meaning search. Turns text into numbers (embeddings) and finds the nearest.
-              Runs locally on the laptop with a small embedding model; no API quota.
+Chunkers (how the contract is cut):
+  - "window":    fixed 1,500-character windows with 200 of overlap. Simple; cuts mid-sentence.
+  - "sentences": whole sentences grouped up to 1,500 characters. Never cuts a sentence.
+
+Search methods (how chunks are ranked), all over the same chunks so they compare fairly:
+  - "bm25":   keyword search. Matches words.
+  - "vector": meaning search with a local embedding model.
+  - "merge":  bm25's top-k plus vector's top-k, both sent (up to 2k chunks). Recall can only rise; cost doubles.
+  - "fuse":   both rankings combined into one with reciprocal rank fusion, then top-k. Same cost as one method.
 """
 import re
 from dataclasses import dataclass
@@ -12,13 +17,13 @@ from pathlib import Path
 import numpy as np
 from rank_bm25 import BM25Okapi
 
-CHUNK_CHARS = 1500      # about 350-400 tokens
-OVERLAP_CHARS = 200     # so a sentence cut at a boundary still appears whole in one chunk
-VECTOR_CHUNK_CHARS = 1500   # must fit inside the embedding model's 256-token window
+CHUNKER = "window"          # "window" or "sentences"
+CHUNK_CHARS = 1500          # about 350-400 tokens; both search methods use the same chunks
+OVERLAP_CHARS = 200         # window chunker only
 
-# EMBED_MODEL = "all-MiniLM-L6-v2"      # small, fast, runs on CPU; 384 numbers per text
 EMBED_MODEL = "BAAI/bge-base-en-v1.5"   # retrieval-tuned, 512-token window, 768 numbers per text
-CACHE_DIR = Path("cache/embeddings")  # embeddings are computed once per contract and kept
+CACHE_DIR = Path("cache/embeddings")    # embeddings are computed once per contract and kept
+RRF_K = 60                              # the standard constant in reciprocal rank fusion
 
 # Keyword queries: rare, specific words that appear near the clause. (BM25 only.)
 QUERIES = {
@@ -31,8 +36,7 @@ QUERIES = {
                    "non-competition competition restricted period covenant similar business",
 }
 
-# Meaning queries: a plain description of the clause, as a sentence. (Vector search only.)
-# An embedding model compares meanings, so a description beats a pile of keywords.
+# Meaning queries: text that looks like the clause we want. (Vector search only.)
 DESCRIPTIONS = {
     "governing_law": "This agreement shall be governed by and construed in accordance with the laws "
                      "of a particular state or country.",
@@ -54,7 +58,7 @@ class Chunk:
 
 
 def chunk_text(text: str, size: int = CHUNK_CHARS, overlap: int = OVERLAP_CHARS) -> list[Chunk]:
-    """Sliding window over the text. Simple and robust; smarter chunking comes later."""
+    """Sliding window over the text. Simple and robust; cuts mid-sentence."""
     chunks = []
     step = size - overlap
     for i, start in enumerate(range(0, max(len(text), 1), step)):
@@ -65,6 +69,35 @@ def chunk_text(text: str, size: int = CHUNK_CHARS, overlap: int = OVERLAP_CHARS)
         if start + size >= len(text):
             break
     return chunks
+
+
+# A sentence ends at . ; or : followed by whitespace and then a capital, a digit, or an opening bracket.
+# Not perfect for legal text ("Inc.", "Sec. 6.2(e)"), but good enough to measure.
+SENTENCE_END = re.compile(r"(?<=[.;:])\s+(?=[A-Z0-9(])")
+
+
+def chunk_text_sentences(text: str, size: int = CHUNK_CHARS) -> list[Chunk]:
+    """Group whole sentences into chunks of about `size` characters. Never cut a sentence;
+    only a single sentence longer than `size` ends up alone in its own chunk."""
+    chunks, buf, buf_start, pos = [], [], 0, 0
+    for sentence in SENTENCE_END.split(text):
+        if buf and sum(len(s) for s in buf) + len(sentence) > size:
+            piece = " ".join(buf)
+            chunks.append(Chunk(id=len(chunks), start=buf_start, end=buf_start + len(piece), text=piece))
+            buf, buf_start = [], pos
+        buf.append(sentence)
+        pos += len(sentence) + 1
+    if buf:
+        piece = " ".join(buf)
+        chunks.append(Chunk(id=len(chunks), start=buf_start, end=buf_start + len(piece), text=piece))
+    return chunks
+
+
+def make_chunks(text: str) -> list[Chunk]:
+    """One place that knows which chunker is in use."""
+    if CHUNKER == "sentences":
+        return chunk_text_sentences(text)
+    return chunk_text(text)
 
 
 def tokenize(text: str) -> list[str]:
@@ -80,20 +113,21 @@ def embed(texts: list[str]) -> np.ndarray:
     """One row of numbers per text. Rows are scaled to length 1, so a dot product is a cosine."""
     global _model
     if _model is None:
-        from sentence_transformers import SentenceTransformer   # imported here: slow import, only when needed
+        from sentence_transformers import SentenceTransformer   # slow import, only when needed
         _model = SentenceTransformer(EMBED_MODEL)
+        print(f"embedding model: {EMBED_MODEL}, max tokens {_model.max_seq_length}, "
+              f"chunker={CHUNKER}, chunk={CHUNK_CHARS} chars", flush=True)
     return _model.encode(texts, normalize_embeddings=True, batch_size=64, show_progress_bar=False)
 
 
 class ContractIndex:
-    """Chunks of one contract plus a BM25 index over them. Built once, queried many times."""
+    """Chunks of one contract plus a BM25 index over them."""
 
-    def __init__(self, text: str):
-        self.chunks = chunk_text(text)
+    def __init__(self, text: str, chunks: list[Chunk] | None = None):
+        self.chunks = chunks if chunks is not None else make_chunks(text)
         self.bm25 = BM25Okapi([tokenize(c.text) for c in self.chunks])
 
     def search(self, query: str, k: int = 3) -> list[Chunk]:
-        """The k chunks that best match the query words, best first."""
         scores = self.bm25.get_scores(tokenize(query))
         order = sorted(range(len(self.chunks)), key=lambda i: scores[i], reverse=True)
         return [self.chunks[i] for i in order[:k]]
@@ -105,9 +139,10 @@ class ContractIndex:
 class VectorIndex:
     """Chunks of one contract plus one embedding per chunk. Embeddings are cached on disk."""
 
-    def __init__(self, text: str, cache_key: str | None = None):
-        self.chunks = chunk_text(text, size=VECTOR_CHUNK_CHARS)
-        cache_file = CACHE_DIR / f"{cache_key}_{EMBED_MODEL.split('/')[-1]}_c{VECTOR_CHUNK_CHARS}.npy" if cache_key else None
+    def __init__(self, text: str, cache_key: str | None = None, chunks: list[Chunk] | None = None):
+        self.chunks = chunks if chunks is not None else make_chunks(text)
+        tag = f"{EMBED_MODEL.split('/')[-1]}_{CHUNKER}_c{CHUNK_CHARS}"   # every setting that changes the numbers
+        cache_file = CACHE_DIR / f"{cache_key}_{tag}.npy" if cache_key else None
         if cache_file and cache_file.exists():
             self.vectors = np.load(cache_file)
         else:
@@ -117,20 +152,50 @@ class VectorIndex:
                 np.save(cache_file, self.vectors)
 
     def search(self, query: str, k: int = 3) -> list[Chunk]:
-        """The k chunks whose meaning is closest to the query, best first."""
         q = embed([query])[0]
-        scores = self.vectors @ q                    # cosine similarity to every chunk, in one line
-        order = np.argsort(-scores)                  # highest first
+        scores = self.vectors @ q
+        order = np.argsort(-scores)
         return [self.chunks[i] for i in order[:k]]
 
     def retrieve_for_clause(self, clause: str, k: int = 3) -> list[Chunk]:
         return self.search(DESCRIPTIONS[clause], k)
 
 
+class HybridIndex:
+    """Both searches over the same chunks, combined either by merging or by fusing."""
+
+    def __init__(self, text: str, cache_key: str | None = None, mode: str = "fuse"):
+        self.chunks = make_chunks(text)                      # one chunk list, shared by both
+        self.bm25 = ContractIndex(text, chunks=self.chunks)
+        self.vector = VectorIndex(text, cache_key=cache_key, chunks=self.chunks)
+        self.mode = mode
+
+    def retrieve_for_clause(self, clause: str, k: int = 3) -> list[Chunk]:
+        if self.mode == "merge":
+            # Send both lists. Keyword's k come first; vector's add only chunks not already there.
+            seen, out = set(), []
+            for c in self.bm25.retrieve_for_clause(clause, k) + self.vector.retrieve_for_clause(clause, k):
+                if c.id not in seen:
+                    seen.add(c.id)
+                    out.append(c)
+            return out
+        # Fuse: take a deeper list from each, give every chunk 1/(60 + rank) from each list, add up, keep top-k.
+        depth = max(10, 3 * k)
+        scores: dict[int, float] = {}
+        for ranked in (self.bm25.retrieve_for_clause(clause, depth),
+                       self.vector.retrieve_for_clause(clause, depth)):
+            for rank, c in enumerate(ranked, start=1):
+                scores[c.id] = scores.get(c.id, 0.0) + 1.0 / (RRF_K + rank)
+        best = sorted(scores, key=lambda cid: scores[cid], reverse=True)[:k]
+        return [self.chunks[cid] for cid in best]
+
+
 def build_index(text: str, method: str, cache_key: str | None = None):
-    """One place that knows how to build either kind of index."""
+    """One place that knows how to build any kind of index."""
     if method == "bm25":
         return ContractIndex(text)
     if method == "vector":
         return VectorIndex(text, cache_key=cache_key)
-    raise ValueError(f"unknown method: {method} (use 'bm25' or 'vector')")
+    if method in ("merge", "fuse"):
+        return HybridIndex(text, cache_key=cache_key, mode=method)
+    raise ValueError(f"unknown method: {method} (use bm25, vector, merge or fuse)")

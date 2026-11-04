@@ -1,28 +1,26 @@
 """Retrieval eval: did the chunks we would send the model contain the lawyers' sentence?
 
-No model API calls. The vector method runs a small embedding model locally; the first vector
-run embeds every dev contract (a few minutes on a laptop) and caches the result, so later
-runs are fast.
-
-The number it reports is recall@k: of all the clauses the lawyers highlighted, what fraction
-had their highlighted sentence inside the top-k retrieved chunks. The extractor can never
-score higher than this on retrieved text: if the sentence is not sent, the model cannot find it.
+No model API calls. Reports recall@k per clause, and the average number of chunks actually
+sent at each k (merge sends up to 2k, so its recall must be read against its cost).
 
 Usage:
-    python eval_retrieval.py                 # dev split, bm25
-    python eval_retrieval.py dev vector      # dev split, vector search
-    python eval_retrieval.py test bm25       # only when you are done tuning
+    python eval_retrieval.py dev bm25
+    python eval_retrieval.py dev vector
+    python eval_retrieval.py dev merge
+    python eval_retrieval.py dev fuse
+    python eval_retrieval.py test bm25      # only when you are done tuning
 """
 import sys
 import time
 from pathlib import Path
 
+import retriever
 from data import CLAUSES, highlights, load_cuad
 from retriever import build_index
 
 SPLIT = sys.argv[1] if len(sys.argv) > 1 else "dev"
 METHOD = sys.argv[2] if len(sys.argv) > 2 else "bm25"
-KS = [3, 5]
+KS = [3, 5, 8]
 PROBE_CHARS = 150       # a hit = the first 150 chars of the highlight appear in a retrieved chunk
 
 
@@ -32,12 +30,12 @@ def normalize(text) -> str:
 
 df = load_cuad()
 subset = df[df["split"] == SPLIT]
-print(f"split={SPLIT}  method={METHOD}: {len(subset)} contracts\n")
+print(f"split={SPLIT}  method={METHOD}  chunker={retriever.CHUNKER}: {len(subset)} contracts\n")
 
-# counts[clause][k] = [hits, total]
-counts = {c: {k: [0, 0] for k in KS} for c in CLAUSES}
+counts = {c: {k: [0, 0] for k in KS} for c in CLAUSES}      # [hits, total]
+sent = {k: [0, 0] for k in KS}                                # [chunks sent, retrievals]
 chunks_per_contract = []
-misses = []     # (file, clause, highlight) for the k=max case, to inspect later
+misses = []
 start = time.perf_counter()
 
 for n_done, (_, row) in enumerate(subset.iterrows(), start=1):
@@ -45,12 +43,17 @@ for n_done, (_, row) in enumerate(subset.iterrows(), start=1):
     index = build_index(text, METHOD, cache_key=Path(row["Filename"]).stem)
     chunks_per_contract.append(len(index.chunks))
     for clause, (text_col, _answer_col) in CLAUSES.items():
-        for h in highlights(row[text_col]):
-            probe = normalize(h)[:PROBE_CHARS]
-            if not probe:
-                continue
-            for k in KS:
-                retrieved = index.retrieve_for_clause(clause, k)
+        hs = highlights(row[text_col])
+        if not hs:
+            continue
+        for k in KS:
+            retrieved = index.retrieve_for_clause(clause, k)
+            sent[k][0] += len(retrieved)
+            sent[k][1] += 1
+            for h in hs:
+                probe = normalize(h)[:PROBE_CHARS]
+                if not probe:
+                    continue
                 hit = any(probe in normalize(c.text) for c in retrieved)
                 counts[clause][k][0] += int(hit)
                 counts[clause][k][1] += 1
@@ -69,6 +72,7 @@ for clause in CLAUSES:
         line += f"{(hits / total if total else 0):>12.0%}"
     line += f"{counts[clause][KS[0]][1]:>8}"
     print(line)
+print(f"{'chunks sent':18}" + "".join(f"{(sent[k][0] / sent[k][1] if sent[k][1] else 0):>12.1f}" for k in KS))
 
 print(f"\n{len(misses)} highlights missed at k={max(KS)}. First five:")
 for file, clause, h in misses[:5]:
