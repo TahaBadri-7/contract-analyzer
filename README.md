@@ -1,0 +1,144 @@
+# contract-analyzer
+
+An LLM service that extracts key clauses from commercial contracts and proves every answer with a verbatim quote, checked against the contract in code. Evaluated against lawyer-labeled contracts ([CUAD](https://www.atticusprojectai.org/cuad)), with a held-out test set, per-clause recall and precision, and a measured comparison of retrieval methods.
+
+Clauses: **governing law**, **cap on liability**, **non-compete**.
+
+## Results
+
+**Held-out test set** (40 contracts drawn at random from contracts never used for tuning; excerpt mode, settings frozen before the run):
+
+| Clause | Recall | Precision | Contracts with the clause |
+| --- | --- | --- | --- |
+| Governing law | TBD | TBD | TBD |
+| Cap on liability | TBD | TBD | TBD |
+| Non-compete | TBD | TBD | TBD |
+
+Evidence quotes verified against the text the model was shown: TBD.
+
+**Whole contract vs retrieved excerpts** (10 long dev contracts, 100–190 KB each, same prompt and model):
+
+| | Whole contract | Excerpts (BM25) |
+| --- | --- | --- |
+| Governing law, correct | 10/10 | 10/10 |
+| Cap on liability, recall / precision | 100% / 50% | 100% / 56% |
+| Non-compete, recall / precision | 100% / 100% | 100% / 100% |
+| Avg input tokens | 29,317 | **6,227** (4.7× fewer) |
+| Avg latency | 31.4 s | **16.5 s** |
+
+**Retrieval** (343 dev contracts, 852 lawyer-highlighted sentences; recall@k = share of highlighted sentences inside the top-k chunks):
+
+| Method | Governing law @3 | Cap @3 | Non-compete @3 | Chunks sent |
+| --- | --- | --- | --- | --- |
+| **BM25 (shipped)** | **98%** | **75%** | **44%** | 3 |
+| Best embedding setup (bge-base, sentence chunks) | 65% | 60% | 32% | 3 |
+| Hybrid, reciprocal rank fusion | 86% | 66% | 49% | 3 |
+| BM25 @8 | 99% | 88% | 65% | 8 |
+| Hybrid merge @5 | 99% | 88% | 65% | 7.8 |
+
+## What it returns
+
+```json
+{
+  "governing_law": {
+    "found": true,
+    "value": "Delaware",
+    "evidence": "This Agreement is governed by the laws of the State of Delaware.",
+    "evidence_verified": true
+  },
+  "cap_on_liability": {
+    "found": true,
+    "value": "Neither party shall be liable for consequential damages",
+    "evidence": "Neither party shall be liable for consequential damages.",
+    "evidence_verified": true
+  },
+  "non_compete": { "found": false, "value": null, "evidence": null, "evidence_verified": false },
+  "model": "gemini-3.5-flash",
+  "mode": "retrieved",
+  "chunks_sent": 17,
+  "input_tokens": 6189,
+  "output_tokens": 412,
+  "seconds": 8.9
+}
+```
+
+- `found: false` is an explicit, allowed answer, so the model is never forced to invent a clause.
+- `evidence_verified` is computed in code, not by the model: the quote must appear verbatim (whitespace-normalised) in the text the model was given. A quote from the model's memory fails.
+
+## How it works
+
+```mermaid
+flowchart LR
+    A[Contract text] --> B[Cut into 1,500-char chunks, 200 overlap]
+    B --> C[BM25 search per clause: k = 3 / 8 / 8]
+    C --> D[Pool, sort, merge touching chunks into continuous spans]
+    D --> E[LLM with JSON schema: found / value / evidence]
+    E --> F[Verify each quote against the excerpts shown]
+    F --> G[JSON response + tokens, latency, mode]
+```
+
+- `extractor.py`: the core. Prompt, schema, the model call, both reading modes (`whole`, `retrieved`), evidence verification. Everything else imports it, so the service and the evals can never drift apart.
+- `retriever.py`: chunking and BM25 search. Also holds the vector-search and hybrid code used in the comparison above.
+- `api.py`: FastAPI. `POST /extract` (input size capped at the edge, `422` on bad input, `503` on model failure, never a `200` with empty fields), `GET /health`.
+
+## How it is evaluated
+
+- **Labels:** CUAD, 510 commercial contracts annotated by trained law students. Each clause has a yes/no or value answer and the highlighted source sentences.
+- **Two piles:** contracts are split 70/30 with a fixed seed. Prompts, definitions and retrieval queries were tuned only on the dev pile; the test pile is scored once, with settings frozen.
+- **Four outcomes per clause:** found right, missed, false alarm, absent right. Reported as recall (share of real clauses caught) and precision (share of reports that are real), next to a do-nothing baseline. Plain accuracy is not used as the headline because it hides whether errors are misses or false alarms.
+- **Retrieval has its own eval** (`eval_retrieval.py`), free and model-free: does the top-k contain the lawyers' sentence? The extractor cannot beat this number on retrieved text.
+- **Running and scoring are separate.** Runs save raw model output with the labels; `score.py` re-scores any saved run without calling the model.
+
+## Decisions, with the numbers behind them
+
+- **BM25 over vector search.** Two embedding models, two chunk sizes and two query styles all lost to keyword search on every clause. Contracts are formulaic ("governed by the laws of"), and general-purpose embedding models score most legal paragraphs as near-identical. A hybrid merge only matched BM25 when BM25 was allowed the same number of chunks; equal-weight fusion was worse than BM25 alone.
+- **Excerpts over whole contracts.** 4.7× fewer tokens and ~2× lower latency with no accuracy loss on long contracts. The prompt tells the model it is reading excerpts, so "not found" means "not in what I was shown".
+- **Lean toward recall.** A missed liability cap is costly and invisible; a false alarm costs the reader seconds, because every flag arrives with its source sentence.
+- **Verify quotes against the text shown, not the whole contract.** This is what catches answers from the model's memory. It also caught a bug in this project: long sentences split across excerpt boundaries failed verification, fixed by merging touching chunks into continuous spans.
+
+## Known limitations
+
+- **Cap-on-liability precision is about 50–56%.** The definition was widened to fix misses on short contracts (recall 33% → 100%) and now also matches indemnity ceilings and price caps in long contracts. The next fix is to anchor the definition to liability for breach of the agreement, tuned on dev only.
+- **Non-compete retrieval recall tops out around 65% at k = 8.** Some non-competes are written as specific prohibitions ("will not conduct any Work using…") with no competition vocabulary for any search to match.
+- **Small samples.** The whole-vs-excerpt comparison uses 10 contracts; the test set 40. Differences of a few points are within noise.
+- **Label noise.** CUAD labels are occasionally inconsistent (for example, one punitive-damages waiver unmarked where similar clauses are marked).
+- **Latency on the free tier is dominated by queueing** (5 to 90 seconds per call regardless of size).
+
+## Run it
+
+```bash
+python -m venv .venv && source .venv/bin/activate
+python -m pip install -r requirements.txt
+export GEMINI_API_KEY="..."
+
+# Service
+python -m uvicorn api:app --reload            # docs at http://localhost:8000/docs
+FAKE_MODEL=1 python -m uvicorn api:app        # canned answers, no API key needed
+
+curl -s -X POST localhost:8000/extract -H 'Content-Type: application/json' \
+  -d '{"text": "This Agreement is governed by the laws of the State of Delaware.", "mode": "whole"}'
+```
+
+Evaluation needs CUAD v1 unzipped into `data/CUAD_v1/` ([Zenodo](https://zenodo.org/record/4595826)):
+
+```bash
+python eval_retrieval.py dev bm25                   # retrieval recall, no model calls, seconds
+python eval_test.py                                 # held-out run; resumable, stops after 18 calls
+python score.py results_test_retrieved.jsonl        # recall / precision / baseline per clause
+```
+
+The vector-search comparison additionally needs `pip install -r requirements-experiments.txt`.
+
+## Layout
+
+```
+extractor.py        core: prompt, schema, model call, reading modes, evidence check
+retriever.py        chunking, BM25, (vector and hybrid search for comparison)
+api.py              FastAPI service
+data.py             CUAD loading and the dev/test split
+eval_cuad.py        extraction eval on dev samples (small / large, whole / retrieved)
+eval_retrieval.py   retrieval recall@k, model-free
+eval_test.py        held-out test run, resumable
+score.py            re-scores any saved run: recall, precision, baseline
+inspect_retrieval.py  debugging: where each search ranks the right chunk
+```
