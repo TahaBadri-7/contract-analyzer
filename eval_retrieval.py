@@ -20,7 +20,7 @@ from retriever import build_index
 
 SPLIT = sys.argv[1] if len(sys.argv) > 1 else "dev"
 METHOD = sys.argv[2] if len(sys.argv) > 2 else "bm25"
-KS = [3, 5, 8]
+KS = [3, 5, 8, 12]
 PROBE_CHARS = 150       # a hit = the first 150 chars of the highlight appear in a retrieved chunk
 
 
@@ -51,7 +51,7 @@ for n_done, (_, row) in enumerate(subset.iterrows(), start=1):
             sent[k][0] += len(retrieved)
             sent[k][1] += 1
             for h in hs:
-                probe = normalize(h)[:PROBE_CHARS]
+                probe = normalize(h.split("<omitted>")[0])[:PROBE_CHARS]
                 if not probe:
                     continue
                 hit = any(probe in normalize(c.text) for c in retrieved)

@@ -39,6 +39,7 @@ class Extraction(BaseModel):
 
 class ClauseResult(Clause):
     evidence_verified: bool         # True only if the quote is really in the text the model was given
+    page: int | None = None         # PDFs only: the page where the evidence starts
 
 
 class ExtractionResult(BaseModel):
@@ -51,6 +52,7 @@ class ExtractionResult(BaseModel):
     input_tokens: int
     output_tokens: int
     seconds: float
+    pages: int | None = None        # PDFs only: how many pages the document had
 
 
 PROMPT_TEMPLATE = """You are reviewing a commercial contract. Extract the clauses below.
