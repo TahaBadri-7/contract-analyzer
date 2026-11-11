@@ -1,0 +1,29 @@
+{
+  "governing_law": {
+    "found": true,
+    "value": "State of New York",
+    "evidence": "The interpretation, construction and performance of this Agreement, and the rights granted and obligations arising hereunder, shall be governed in accordance with the substantive laws of the State of New York, without regard to its conflicts of law rules.",
+    "evidence_verified": true,
+    "page": 48
+  },
+  "cap_on_liability": {
+    "found": true,
+    "value": "Exclusion of special, indirect, incidental, punitive, multiplied or consequential damages, or damages for loss of profit, sales or fees, and aggregate liability capped at $[***]",
+    "evidence": "SUBJECT TO AND WITHOUT LIMITING THE INDEMNIFICATION OBLIGATIONS OF EACH PARTY WITH RESPECT TO THIRD PARTY ACTIONS UNDER SECTIONS 12.1 AND 12.2, AND EXCEPT WITH RESPECT TO LIABILITY ARISING FROM BREACH OF SECTION 9.1 BY A PARTY, NO PARTY OR ANY OF ITS AFFILIATES WILL BE LIABLE TO THE OTHER PARTY OR ITS AFFILIATES UNDER ANY CONTRACT, WARRANTY, NEGLIGENCE, TORT, STRICT LIABILITY OR OTHER LEGAL OR EQUITABLE THEORY FOR ANY SPECIAL, INDIRECT, INCIDENTAL, PUNITIVE, MULTIPLIED OR CONSEQUENTIAL DAMAGES, OR OTHER DAMAGES FOR LOSS OF PROFIT, SALES OR FEES, ARISING OUT OF OR IN CONNECTION WITH THIS AGREEMENT OR ITS SUBJECT MATTER.",
+    "evidence_verified": true,
+    "page": 42
+  },
+  "non_compete": {
+    "found": true,
+    "value": "Prohibition on marketing, promoting, selling, distributing or commercializing any Competing Product in the Territory during the Term",
+    "evidence": "During the Term, neither Company nor any of its Affiliates (including, for the avoidance of doubt, any Third Party that becomes an Affiliate of Company after the Effective Date) shall, alone or in collaboration with any Third Party, market, promote, sell, distribute or otherwise commercialize in the Territory any Competing Product without the prior written consent of Janssen.",
+    "evidence_verified": true,
+    "page": 34
+  },
+  "model": "gemini-3.5-flash",
+  "mode": "retrieved",
+  "chunks_sent": 19,
+  "input_tokens": 6646,
+  "seconds": 8.3,
+  "pages": 66
+}

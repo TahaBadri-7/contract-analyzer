@@ -1,0 +1,354 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Contract analyzer</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;500;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --paper: #f5f7f6;
+    --surface: #ffffff;
+    --ink: #17233a;
+    --muted: #5a6577;
+    --rule: #d8dee5;
+    --highlight: rgba(255, 219, 46, 0.6);
+    --redpen: #b3261e;
+    --focus: #2f5da8;
+    --sans: "Public Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+    --serif: "Source Serif 4", Georgia, "Times New Roman", serif;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --paper: #12161d;
+      --surface: #1a2029;
+      --ink: #e6e9ee;
+      --muted: #9aa4b2;
+      --rule: #2b333e;
+      --highlight: rgba(232, 201, 58, 0.32);
+      --redpen: #f2867e;
+      --focus: #8db0f0;
+      color-scheme: dark;
+    }
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font: 400 1rem/1.55 var(--sans);
+  }
+  .page { max-width: 46rem; margin: 0 auto; padding: 3.5rem 1.25rem 4rem; }
+
+  h1 { font: 700 2.25rem/1.15 var(--sans); letter-spacing: -0.02em; margin: 0 0 0.75rem; }
+  .lede { font-size: 1.125rem; color: var(--muted); margin: 0 0 2.5rem; max-width: 38rem; }
+
+  form { display: grid; gap: 1.25rem; margin-bottom: 1.5rem; }
+  .drop {
+    display: grid; gap: 0.25rem;
+    padding: 1.5rem 1.25rem;
+    background: var(--surface);
+    border: 1.5px dashed var(--rule);
+    border-radius: 0.5rem;
+    cursor: pointer;
+  }
+  .drop.dragging { border-color: var(--focus); }
+  .drop input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+  .drop-title { font-weight: 500; }
+  .drop-hint, .filename { color: var(--muted); font-size: 0.9375rem; }
+  .filename:empty { display: none; }
+  .filename { color: var(--ink); }
+
+  fieldset { border: 0; padding: 0; margin: 0; display: flex; flex-wrap: wrap; gap: 0.5rem 1.5rem; }
+  legend { font-weight: 500; margin-bottom: 0.375rem; padding: 0; }
+  fieldset label { display: grid; grid-template-columns: auto 1fr; column-gap: 0.5rem; align-items: baseline; cursor: pointer; }
+  fieldset small { grid-column: 2; color: var(--muted); font-size: 0.875rem; }
+
+  button {
+    justify-self: start;
+    font: 500 1rem var(--sans);
+    color: var(--surface);
+    background: var(--ink);
+    border: 0;
+    border-radius: 0.375rem;
+    padding: 0.7rem 1.25rem;
+    cursor: pointer;
+  }
+  button:disabled { opacity: 0.45; cursor: not-allowed; }
+  .actions { display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem 1.25rem; }
+  button.secondary { background: none; color: var(--ink); border: 1.5px solid var(--rule); }
+  .note { color: var(--muted); font-size: 0.9375rem; margin: 0 0 1rem; }
+  .note:empty { display: none; }
+  :focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
+  .drop:focus-within { outline: 2px solid var(--focus); outline-offset: 3px; }
+
+  .status { min-height: 1.5rem; color: var(--muted); margin: 0 0 1rem; }
+  .status.error { color: var(--redpen); }
+
+  .clause { padding: 1.75rem 0; border-top: 1px solid var(--rule); }
+  .clause h2 { font: 600 0.9375rem/1.3 var(--sans); color: var(--muted); margin: 0 0 0.375rem; }
+  .verdict { font: 500 1.25rem/1.4 var(--sans); margin: 0 0 1rem; }
+  .verdict.absent { color: var(--muted); font-weight: 400; }
+
+  blockquote {
+    margin: 0 0 0.75rem;
+    font: 400 1.125rem/1.75 var(--serif);
+    max-width: 40rem;
+  }
+  /* The highlighter: drawn once, left to right, when the answer arrives. */
+  mark {
+    color: inherit;
+    background: linear-gradient(transparent 14%, var(--highlight) 14%, var(--highlight) 90%, transparent 90%) no-repeat;
+    background-size: 0% 100%;
+    -webkit-box-decoration-break: clone;
+    box-decoration-break: clone;
+    padding: 0 0.15em;
+    transition: background-size 900ms ease-out;
+  }
+  .shown mark { background-size: 100% 100%; }
+  .unverified mark {
+    background: none;
+    text-decoration: underline wavy var(--redpen) 1.5px;
+    text-underline-offset: 0.3em;
+  }
+  .receipt { font-size: 0.9375rem; color: var(--muted); margin: 0; }
+  .unverified .receipt { color: var(--redpen); }
+
+  .run {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: 0.25rem 1.5rem;
+    margin: 0;
+    padding-top: 1.5rem;
+    border-top: 1px solid var(--rule);
+    font-size: 0.9375rem;
+  }
+  .run dt { color: var(--muted); }
+  .run dd { margin: 0; }
+
+  footer { margin-top: 3rem; color: var(--muted); font-size: 0.9375rem; }
+  a { color: inherit; text-underline-offset: 0.2em; }
+
+  @media (prefers-reduced-motion: reduce) {
+    mark { transition: none; }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+  <header>
+    <h1>Contract analyzer</h1>
+    <p class="lede">Upload a contract and get its governing law, liability cap and non-compete, each with the exact sentence it came from and the page it is on. Every quote is checked word for word against the document.</p>
+  </header>
+
+  <main>
+    <form id="form">
+      <label class="drop" id="drop" for="file">
+        <input type="file" id="file" accept=".pdf,application/pdf">
+        <span class="drop-title">Choose a PDF</span>
+        <span class="drop-hint">or drop it here. Up to 10 MB. Scanned PDFs can't be read.</span>
+        <span class="filename" id="filename"></span>
+      </label>
+
+      <fieldset>
+        <legend>Read</legend>
+        <label><input type="radio" name="mode" value="retrieved" checked> Relevant passages <small>faster, about a fifth of the cost</small></label>
+        <label><input type="radio" name="mode" value="whole"> Whole contract</label>
+      </fieldset>
+
+      <div class="actions">
+        <button type="submit" id="go" disabled>Analyze contract</button>
+        <button type="button" class="secondary" id="sample">Try a sample contract</button>
+      </div>
+    </form>
+
+    <p class="status" id="status" role="status" aria-live="polite"></p>
+    <p class="note" id="note"></p>
+
+    <section id="results" hidden>
+      <div id="clauses"></div>
+      <dl class="run" id="run"></dl>
+    </section>
+  </main>
+
+  <footer>
+    <p>How these answers are measured against lawyer-labeled contracts: <a href="https://github.com/YOUR-USERNAME/contract-analyzer">the project README</a>.</p>
+  </footer>
+</div>
+
+<script>
+  const CLAUSES = [
+    ["governing_law", "Governing law"],
+    ["cap_on_liability", "Cap on liability"],
+    ["non_compete", "Non-compete"],
+  ];
+  const MAX_BYTES = 10_000_000;
+
+  const form = document.getElementById("form");
+  const fileInput = document.getElementById("file");
+  const drop = document.getElementById("drop");
+  const filename = document.getElementById("filename");
+  const go = document.getElementById("go");
+  const statusEl = document.getElementById("status");
+  const results = document.getElementById("results");
+  const clausesEl = document.getElementById("clauses");
+  const runEl = document.getElementById("run");
+  const sampleBtn = document.getElementById("sample");
+  const note = document.getElementById("note");
+
+  // Everything from the contract is inserted with textContent, never innerHTML,
+  // so text inside a PDF can never run as code in this page.
+  function el(tag, text, className) {
+    const node = document.createElement(tag);
+    if (text !== undefined) node.textContent = text;
+    if (className) node.className = className;
+    return node;
+  }
+
+  function setStatus(text, isError = false) {
+    statusEl.textContent = text;
+    statusEl.classList.toggle("error", isError);
+  }
+
+  function pickFile(file) {
+    if (!file) return;
+    filename.textContent = `${file.name} (${(file.size / 1_000_000).toFixed(1)} MB)`;
+    go.disabled = false;
+    setStatus("");
+  }
+
+  fileInput.addEventListener("change", () => pickFile(fileInput.files[0]));
+  drop.addEventListener("dragover", (e) => { e.preventDefault(); drop.classList.add("dragging"); });
+  drop.addEventListener("dragleave", () => drop.classList.remove("dragging"));
+  drop.addEventListener("drop", (e) => {
+    e.preventDefault();
+    drop.classList.remove("dragging");
+    if (e.dataTransfer.files.length) {
+      fileInput.files = e.dataTransfer.files;
+      pickFile(fileInput.files[0]);
+    }
+  });
+
+  function explain(status, detail) {
+    if (status === 413) return "That file is over 10 MB. Try a smaller PDF.";
+    if (status === 422 && /scan/i.test(detail)) return "This PDF has no selectable text, so it looks scanned. This demo can't read scans.";
+    if (status === 422 && /not a PDF/i.test(detail)) return "That file isn't a PDF.";
+    if (status === 422 && /too long/i.test(detail)) return "This contract is too long to read whole. Choose \"Relevant passages\" and try again.";
+    if (status === 429 && /daily/i.test(detail)) return "The demo has used today's allowance of model calls. The sample contract still works, and costs nothing.";
+    if (status === 429) return "That's a few in a row from you. Wait ten minutes, or try the sample contract.";
+    if (status === 503) return "The language model didn't answer in time. Try again in a minute, or try the sample contract.";
+    return detail || `Something went wrong (error ${status}).`;
+  }
+
+  function render(r) {
+    clausesEl.replaceChildren();
+    const readWhole = r.mode === "whole";
+
+    for (const [key, name] of CLAUSES) {
+      const c = r[key];
+      const article = el("article", undefined, "clause");
+      article.append(el("h2", name));
+
+      if (!c.found) {
+        const absent = readWhole ? "Not in this contract." : "Not in the passages that were read.";
+        article.append(el("p", absent, "verdict absent"));
+      } else {
+        article.append(el("p", c.value || "Found", "verdict"));
+        const quote = el("blockquote");
+        quote.append(el("mark", c.evidence || ""));
+        article.append(quote);
+        let receipt;
+        if (!c.evidence_verified) {
+          article.classList.add("unverified");
+          receipt = "This sentence could not be found in the document. Don't rely on this answer.";
+        } else if (c.page) {
+          receipt = `Quoted from page ${c.page}, checked word for word.`;
+        } else {
+          receipt = "Checked word for word against the document.";
+        }
+        article.append(el("p", receipt, "receipt"));
+      }
+      clausesEl.append(article);
+    }
+
+    runEl.replaceChildren();
+    const facts = [
+      ["Pages", r.pages ?? "not a PDF"],
+      ["Read", readWhole ? "whole contract" : `${r.chunks_sent} passages`],
+      ["Tokens sent", r.input_tokens.toLocaleString()],
+      ["Time", `${r.seconds.toFixed(1)} s`],
+      ["Model", r.model],
+    ];
+    for (const [label, value] of facts) {
+      runEl.append(el("dt", label), el("dd", String(value)));
+    }
+
+    results.hidden = false;
+    requestAnimationFrame(() => requestAnimationFrame(() => results.classList.add("shown")));
+  }
+
+  // A result saved earlier from one real run on a public contract: no upload, no model call,
+  // instant, and it keeps working when the demo's daily allowance is used up.
+  sampleBtn.addEventListener("click", async () => {
+    setStatus("");
+    results.hidden = true;
+    results.classList.remove("shown");
+    try {
+      const response = await fetch("/static/sample_result.json");
+      if (!response.ok) throw new Error();
+      render(await response.json());
+      const link = el("a", "Open the sample PDF");
+      link.href = "/static/sample.pdf";
+      link.target = "_blank";
+      link.rel = "noopener";
+      note.replaceChildren(
+        "A saved result for a sample contract: a 2019 promotion agreement filed with the SEC, from the CUAD dataset (CC BY 4.0). ",
+        link, "."
+      );
+    } catch {
+      setStatus("The sample isn't available right now.", true);
+    }
+  });
+
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const file = fileInput.files[0];
+    if (!file) return;
+    if (file.size > MAX_BYTES) { setStatus(explain(413), true); return; }
+
+    const mode = form.querySelector('input[name="mode"]:checked').value;
+    const body = new FormData();
+    body.append("file", file);
+
+    go.disabled = true;
+    note.replaceChildren();
+    results.hidden = true;
+    results.classList.remove("shown");
+    const started = Date.now();
+    const tick = () => setStatus(`Reading the contract… ${Math.round((Date.now() - started) / 1000)} s`);
+    tick();
+    const timer = setInterval(tick, 1000);
+
+    try {
+      const response = await fetch(`/extract-pdf?mode=${mode}`, { method: "POST", body });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        setStatus(explain(response.status, data.detail), true);
+        return;
+      }
+      setStatus("");
+      render(data);
+    } catch {
+      setStatus("Couldn't reach the server. Check your connection and try again.", true);
+    } finally {
+      clearInterval(timer);
+      go.disabled = false;
+    }
+  });
+</script>
+</body>
+</html>

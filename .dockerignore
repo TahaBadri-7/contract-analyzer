@@ -1,0 +1,10 @@
+# Never inside the image: secrets, the local environment, data, results, git history.
+.env
+.venv/
+data/
+cache/
+results*.jsonl
+__pycache__/
+.git/
+.DS_Store
+big.json
