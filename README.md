@@ -1,5 +1,7 @@
 # contract-analyzer
 
+**Live demo:** [contract-analyzer-nebl.onrender.com](https://contract-analyzer-nebl.onrender.com). Click "Try a sample contract" for an instant result, or upload a contract PDF. Free hosting: the first visit after a quiet spell takes about a minute to wake up.
+
 Legal teams read contracts to find the handful of clauses that carry risk. This service finds three of them in a contract PDF (**governing law**, **cap on liability**, **non-compete**), returns each with the exact sentence and page it came from, and checks every quote against the document in code.
 
 On 40 contracts it never saw during development, it found **92% of liability caps at 88% precision** and **95% of governing-law clauses with no false alarms**, reading excerpts picked by keyword search instead of whole contracts: **4.7× fewer tokens** with no accuracy loss on long contracts. Evaluated against lawyer-labeled contracts ([CUAD](https://www.atticusprojectai.org/cuad)), with a held-out test set, per-clause recall and precision, and a measured comparison of retrieval methods.
