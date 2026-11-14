@@ -7,6 +7,7 @@ Docs: http://localhost:8000/docs
 """
 import os
 import time
+import logging
 from collections import defaultdict, deque
 from pathlib import Path
 from typing import Literal
@@ -29,6 +30,7 @@ PER_ADDRESS_CALLS = 3                                                # per visit
 PER_ADDRESS_WINDOW = 600                                             # ...per 10 minutes
 
 app = FastAPI(title="Contract Analyzer", version="0.4")
+log = logging.getLogger("uvicorn.error")
 app.mount("/static", StaticFiles(directory=PAGE.parent), name="static")   # the sample contract and its saved result
 
 _today = {"day": "", "calls": 0}
@@ -89,6 +91,7 @@ def extract_endpoint(req: ExtractRequest, request: Request):
         return extract(req.text, mode=req.mode)
     except Exception as e:
         # The model failed: timeout, rate limit, cut-off JSON. Say so with a 503.
+        log.exception("extraction failed")
         raise HTTPException(status_code=503, detail=f"extraction failed: {type(e).__name__}")
 
 
@@ -107,6 +110,7 @@ def extract_pdf_endpoint(request: Request, file: UploadFile = File(...),
     except NoTextLayer as e:
         raise HTTPException(status_code=422, detail=str(e))
     except Exception as e:
+        log.exception("extraction failed")
         raise HTTPException(status_code=422, detail=f"could not read the PDF: {type(e).__name__}")
     if mode == "whole" and len(doc.text) > MAX_CHARS:
         raise HTTPException(status_code=422, detail="contract too long for whole mode; use mode=retrieved")
