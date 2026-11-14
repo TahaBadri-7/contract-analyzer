@@ -1,20 +1,20 @@
 # contract-analyzer
 
-An LLM service that extracts key clauses from commercial contracts and proves every answer with a verbatim quote, checked against the contract in code. Evaluated against lawyer-labeled contracts ([CUAD](https://www.atticusprojectai.org/cuad)), with a held-out test set, per-clause recall and precision, and a measured comparison of retrieval methods.
+Legal teams read contracts to find the handful of clauses that carry risk. This service finds three of them in a contract PDF (**governing law**, **cap on liability**, **non-compete**), returns each with the exact sentence and page it came from, and checks every quote against the document in code.
 
-Clauses: **governing law**, **cap on liability**, **non-compete**.
+On 40 contracts it never saw during development, it found **92% of liability caps at 88% precision** and **95% of governing-law clauses with no false alarms**, reading excerpts picked by keyword search instead of whole contracts: **4.7× fewer tokens** with no accuracy loss on long contracts. Evaluated against lawyer-labeled contracts ([CUAD](https://www.atticusprojectai.org/cuad)), with a held-out test set, per-clause recall and precision, and a measured comparison of retrieval methods.
 
 ## Results
 
-**Held-out test set** (40 contracts drawn at random from contracts never used for tuning; excerpt mode, settings frozen before the run):
+**Held-out test set**: 40 contracts drawn at random from contracts never used for tuning; excerpt mode; settings frozen before the run.
 
 | Clause | Recall | Precision | Contracts with the clause |
 | --- | --- | --- | --- |
-| Governing law | TBD | TBD | TBD |
-| Cap on liability | TBD | TBD | TBD |
-| Non-compete | TBD | TBD | TBD |
+| Governing law | **95%** (35 of 37) | **100%** (35 of 35) | 37 of 40 |
+| Cap on liability | **92%** (22 of 24) | **88%** (22 of 25) | 24 of 40 |
+| Non-compete | 62% (5 of 8) | 71% (5 of 7) | 8 of 40 |
 
-Evidence quotes verified against the text the model was shown: TBD.
+Evidence quotes verified word for word against the text the model was shown: 66 of 68 (97%). Average 4,313 input tokens and 20.9 s per contract (free tier; latency is mostly queueing). Counts are small: non-compete appears in only 8 of the 40 contracts, so its rates could move a lot with a larger sample.
 
 **Whole contract vs retrieved excerpts** (10 long dev contracts, 100–190 KB each, same prompt and model):
 
@@ -106,10 +106,10 @@ flowchart LR
 
 ## Known limitations
 
-- **Cap-on-liability precision is about 50–56%.** The definition was widened to fix misses on short contracts (recall 33% → 100%) and now also matches indemnity ceilings and price caps in long contracts. The next fix is to anchor the definition to liability for breach of the agreement, tuned on dev only.
+- **Cap-on-liability precision drops on long contracts.** 88% on the random test mix, but 50–56% on ten long dev contracts chosen to stress it. The definition was widened to fix misses on short contracts (recall 33% → 100%) and now also matches indemnity ceilings and price caps that long contracts are full of. The next fix is to anchor the definition to liability for breach of the agreement, tuned on dev only.
 - **Non-compete retrieval recall is 68% at k = 8** (74% at 12, 80% with the hybrid at 12). Some non-competes are written as specific prohibitions ("will not conduct any Work using…") with no competition vocabulary for keyword search to match.
 - **PDF text extraction occasionally splits words** in letter-spaced headings ("P ARTY" for "PARTY"), which lost 5 of 845 highlights. Scanned PDFs are refused, not OCR'd.
-- **Small samples.** The whole-vs-excerpt comparison uses 10 contracts; the test set 40. Differences of a few points are within noise.
+- **Small samples.** The whole-vs-excerpt comparison uses 10 contracts; the test set 40, with only 8 non-competes. Differences of a few points are within noise.
 - **Label noise.** CUAD labels are occasionally inconsistent (for example, one punitive-damages waiver unmarked where similar clauses are marked).
 - **Latency on the free tier is dominated by queueing** (5 to 90 seconds per call regardless of size).
 
