@@ -73,7 +73,7 @@ class ExtractRequest(BaseModel):
     mode: Literal["whole", "retrieved"] = "whole"
 
 
-@app.get("/", include_in_schema=False)
+@app.api_route("/", methods=["GET", "HEAD"], include_in_schema=False)
 def home():
     """The upload page. Served by the same app, so the page and the API share one address."""
     return FileResponse(PAGE)
